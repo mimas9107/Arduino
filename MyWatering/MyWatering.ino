@@ -1,76 +1,93 @@
-/* Code body from ReadAnalogVoltage.ino */
-
 #include <string.h>
 
-int lvlPin = A0;
-int soilPin = A1;
-int relayPin = 2;
-int wateringtime=5; /// watering process time constant in "second";
-int RH_setpoint = 45;
-int LVL_setpoint = 35;
-unsigned long detectingtime=60000; /// if soil_realRH > [RH set point] then sleep for 60 second. 
-unsigned long standbytime=60000;
-String prompt;
+// 感測器和繼電器腳位定義
+const int WATER_LEVEL_PIN = A0;      // 水位感測器類比輸入腳位
+const int SOIL_MOISTURE_PIN = A1;    // 土壤濕度感測器類比輸入腳位
+const int RELAY_PIN = 9;             // 繼電器數位輸出腳位
 
-// the setup routine runs once when you press reset:
+// 澆水系統設定參數
+const int WATERING_TIME = 5;         // 澆水時間 (秒)
+const int SOIL_MOISTURE_THRESHOLD = 45; // 土壤濕度閾值 (%)
+const int WATER_LEVEL_THRESHOLD = 35;  // 水位閾值 (%)
+const unsigned long DETECTION_INTERVAL = 180000; // 檢測間隔 (毫秒)
+const unsigned long STANDBY_INTERVAL = DETECTION_INTERVAL; // 待機間隔 (毫秒)
+const unsigned long MAX_PUMP_RUN_TIME = 30000; // 水泵最大連續運轉時間 (毫秒)
+const int MAX_PUMPING_TIMES = 6;      // 水泵最大運轉次數
+const int LIMITED_PUMPING_TIMES = 12;  // 水泵極限運轉次數
+
+// 變數宣告
+int waterLevel;                     // 水位百分比
+int soilMoisture;                   // 土壤濕度百分比
+String outputMessage;                // 序列埠輸出訊息
+unsigned long pumpStartTime = 0;     // 水泵開始運轉時間
+int pumpingTimes = 0;                // 水泵運轉次數
+
+// setup() 函式：初始化設定
 void setup() {
-  // initialize serial communication at 9600 bits per second:
-  Serial.begin(9600);
-  pinMode(relayPin,OUTPUT);
-  digitalWrite(relayPin, LOW);
+  Serial.begin(9600);                // 初始化序列埠通訊
+  pinMode(RELAY_PIN, OUTPUT);        // 設定繼電器腳位為輸出模式
+  digitalWrite(RELAY_PIN, LOW);       // 初始化時關閉繼電器
+  Serial.println("Arduino Nano Planting System Starting!"); // 輸出啟動訊息
 }
 
-// the loop routine runs over and over again forever:
+// loop() 函式：主程式迴圈
 void loop() {
-  // read the input on analog pin 0:
-  int lvl_sensorValue = analogRead(lvlPin);
-  int lvl_realHeight = map(lvl_sensorValue, 0, 670, 0, 100);
-  int soil_sensorValue = analogRead(soilPin);
-  int soil_realRH = map(soil_sensorValue, 0, 670, 0, 100);
+  readSensors();                     // 讀取感測器數值
+  printSensorData();                 // 序列埠輸出感測器數值
+  controlWaterPump();                // 控制水泵
+  delay(100);                        // 延遲 100 毫秒
+  outputMessage = "";                // 清空輸出訊息
+}
 
-  // Convert the analog reading (which goes from 0 - 1023) to a voltage (0 - 5V):
-  // float lvl_voltage = lvl_sensorValue * (5.0 / 1023.0);
-  // float soil_voltage = soil_sensorValue * (5.0 / 1023.0);
-  // print out the value you read:
-  prompt.concat("lvl= ");
-  prompt.concat(lvl_realHeight);
-  prompt.concat(", soilRH= ");
-  prompt.concat(soil_realRH);
-  //Serial.println(lvl_sensorValue);
-  // Serial.println(lvl_realHeight);
-  // Serial.println(soil_realRH);
-  Serial.println(prompt);
-  prompt = "";
-  // lvl_realHeight=61;
-  delay(100);
-  if(lvl_realHeight > LVL_setpoint){
-    // soil_realRH = 30;
-    if(soil_realRH < RH_setpoint){
-      digitalWrite(relayPin, HIGH);
-      Serial.println("watering...");
-      delay(wateringtime * 1000);
+// readSensors() 函式：讀取感測器數值
+void readSensors() {
+  waterLevel = map(analogRead(WATER_LEVEL_PIN), 0, 670, 0, 100); // 讀取水位並映射到 0-100
+  soilMoisture = map(analogRead(SOIL_MOISTURE_PIN), 0, 670, 0, 100); // 讀取土壤濕度並映射到 0-100
+}
+
+// printSensorData() 函式：序列埠輸出感測器數值
+void printSensorData() {
+  outputMessage = "水位: " + String(waterLevel) + "%, 土壤濕度: " + String(soilMoisture) + "%";
+  Serial.println(outputMessage);
+}
+
+// controlWaterPump() 函式：控制水泵
+void controlWaterPump() {
+  if (waterLevel > WATER_LEVEL_THRESHOLD) { // 如果水位高於閾值
+    if (soilMoisture < SOIL_MOISTURE_THRESHOLD) { // 如果土壤濕度低於閾值
+      if (digitalRead(RELAY_PIN) == LOW) { // 如果水泵關閉，則啟動
+        digitalWrite(RELAY_PIN, HIGH);
+        pumpStartTime = millis(); // 記錄水泵開始運轉時間
+        Serial.println("正在澆水...");
+      }
+
+      if (millis() - pumpStartTime >= MAX_PUMP_RUN_TIME) { // 檢查水泵連續運轉時間
+        digitalWrite(RELAY_PIN, LOW); // 強制關閉水泵
+        Serial.println("水泵連續運轉時間過長，已關閉！");
+      } else {
+        delay(WATERING_TIME * 1000); // 澆水 wateringtime 秒
+        pumpingTimes++; // 累加水泵運轉次數
+
+        if (pumpingTimes > MAX_PUMPING_TIMES && pumpingTimes < LIMITED_PUMPING_TIMES) {
+          digitalWrite(RELAY_PIN, LOW); // 關閉水泵
+          delay(10000); // 延長延遲時間，防止水泵過度運轉
+          Serial.println("水泵運轉次數過多，暫停澆水！");
+        } else if (pumpingTimes >= LIMITED_PUMPING_TIMES) {
+          digitalWrite(RELAY_PIN, LOW); // 強制關閉水泵
+          Serial.println("水泵運轉次數達到上限，系統停止澆水！");
+          pumpingTimes = 0; // 重置水泵運轉次數
+          // 加入更強硬的保護機制，例如停止系統運作
+        }
+      }
+    } else { // 如果土壤濕度高於閾值
+      digitalWrite(RELAY_PIN, LOW); // 關閉水泵
+      Serial.println("土壤濕度足夠，待機 " + String(STANDBY_INTERVAL / 1000) + " 秒");
+      delay(STANDBY_INTERVAL);
+      pumpingTimes = 0; // 重置水泵運轉次數
     }
-    else{
-      digitalWrite(relayPin, LOW);
-      //prompt = "";
-      standbytime=detectingtime/2;
-      prompt.concat("RH > setpoint=[");
-      prompt.concat(RH_setpoint);
-      prompt.concat("]. Stand by ");
-      prompt.concat(standbytime/1000);
-      prompt.concat(" sec");
-      Serial.println(prompt);
-      delay(standbytime);
-    }
-  } else
-  {
-    prompt = "";
-    prompt.concat("Lower water level ... setpoint=[");
-    prompt.concat(LVL_setpoint);
-    prompt.concat("], Please refill water tank!!");
-    Serial.println(prompt);
-    digitalWrite(relayPin, LOW);
-    delay(detectingtime/30);
+  } else { // 如果水位低於閾值
+    digitalWrite(RELAY_PIN, LOW); // 關閉水泵
+    Serial.println("水位過低，請加水！");
+    delay(DETECTION_INTERVAL / 30); // 延遲一段時間
   }
-  prompt = "";  
 }
